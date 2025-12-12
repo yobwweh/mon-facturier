@@ -28,6 +28,8 @@ jobs:
       # 4. Lance la construction (Mac et Windows)
       # Le serveur Mac est capable de construire l'exe Windows aussi
       - name: Build Electron App v2
+
+      
         run: npm run dist -- --mac --win
         env:
           # Nécessaire pour éviter certaines erreurs de publication

@@ -3,25 +3,33 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "main": "public/electron.cjs",
+  "main": "electron/main.cjs",
   "author": "Yoboué N'Guessan Armel Constant",
   "description": "Application de facturation CI",
+  "productName": "Mon Facturier CI",
   "scripts": {
     "dev": "vite",
+    "start": "electron .",
     "build": "vite build",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
-    "electron": "electron .",
-    "dist": "vite build && electron-builder"
+    "postinstall": "electron-builder install-app-deps",
+    "dist": "npm run build && electron-builder"
   },
   "dependencies": {
+    "@lottiefiles/dotlottie-web": "^0.58.0",
+    "@react-pdf/renderer": "^4.3.1",
+    "better-sqlite3": "^12.5.0",
+    "daisyui": "^4.12.10",
     "html2pdf.js": "^0.12.1",
+    "lottie-react": "^2.4.1",
     "lucide-react": "^0.294.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-to-print": "^3.2.0"
   },
   "devDependencies": {
+    "@tailwindcss/typography": "^0.5.19",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
@@ -45,8 +53,11 @@
     },
     "files": [
       "dist/**/*",
-      "public/electron.cjs",
-      "public/**/*"
+      "electron/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**"
     ],
     "win": {
       "target": "nsis",
@@ -55,7 +66,9 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Facturier CI"
     }
   }
 }

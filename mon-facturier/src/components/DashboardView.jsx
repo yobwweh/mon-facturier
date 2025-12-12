@@ -1,239 +1,168 @@
-// src/components/DashboardView.jsx
 import React from 'react';
-import { User, FileText, CheckSquare, Square, Plus, Trash2, CreditCard, ArrowLeft, TrendingUp, AlertCircle, Wallet } from 'lucide-react';
+import { FileText, Plus, ArrowLeft, TrendingUp, AlertCircle, Wallet, Users } from 'lucide-react';
 
 export default function DashboardView({ savedDocuments = [], clients = [], formatMoney = (val) => val + ' FCFA', setView }) {
     
-    // --- 1. PROTECTION INITIALE ---
-    if (!savedDocuments || !Array.isArray(savedDocuments)) {
-        return (
-            <div className="p-10 text-center text-gray-500">
-                <h2 className="text-xl font-bold mb-2">Chargement du tableau de bord...</h2>
-                <p>Analyse des données en cours.</p>
-            </div>
-        );
-    }
+    const validDocs = savedDocuments ? savedDocuments.filter(d => d && typeof d === 'object') : [];
 
-    // --- 2. FONCTIONS DE CALCUL SÉCURISÉES ---
-    // Cette fonction unifie le calcul du montant total d'un document (TTC ou Montant Reçu)
     const getDocAmount = (doc) => {
         if (!doc) return 0;
-        
-        // Cas RECU
-        if (doc.type === 'RECU') {
-            return parseFloat(doc.receiptAmount) || 0;
-        }
-
-        // Cas FACTURE / DEVIS
+        if (doc.type === 'RECU') return parseFloat(doc.receiptAmount) || 0;
         if (!doc.items || !Array.isArray(doc.items)) return 0;
-        
         try {
-            const subtotal = doc.items.reduce((acc, item) => {
-                const qty = parseFloat(item.quantity) || 0;
-                const price = parseFloat(item.price) || 0;
-                return acc + (qty * price);
-            }, 0);
-            
-            const taxRate = parseFloat(doc.taxRate) || 0;
-            return doc.hasTax ? subtotal * (1 + taxRate / 100) : subtotal;
-        } catch (e) { 
-            console.error("Erreur calcul doc:", doc.id, e);
-            return 0; 
-        }
+            const subtotal = doc.items.reduce((acc, item) => acc + ((parseFloat(item.quantity)||0) * (parseFloat(item.price)||0)), 0);
+            return doc.hasTax ? subtotal * (1 + (parseFloat(doc.taxRate)||0) / 100) : subtotal;
+        } catch (e) { return 0; }
     };
 
-    // --- 3. CALCUL DES KPI (INDICATEURS CLÉS) ---
-    const validDocs = savedDocuments.filter(d => d && typeof d === 'object');
-
-    // A. TRESORERIE RÉELLE (CASH ENCAISSÉ)
-    // = Total des REÇUS + Total des FACTURES PAYÉES + Acomptes sur FACTURES EN ATTENTE
     const totalCash = validDocs.reduce((acc, doc) => {
-        let cashInDoc = 0;
-        
-        if (doc.type === 'RECU') {
-            cashInDoc = parseFloat(doc.receiptAmount) || 0;
-        } else if (doc.type === 'FACTURE') {
-            if (doc.status === 'PAID') {
-                cashInDoc = getDocAmount(doc);
-            } else {
-                // Si pas payé, on compte au moins l'acompte perçu
-                cashInDoc = parseFloat(doc.advance) || 0;
-            }
-        }
-        return acc + cashInDoc;
+        if (doc.type === 'RECU') return acc + (parseFloat(doc.receiptAmount) || 0);
+        if (doc.type === 'FACTURE') return acc + (doc.status === 'PAID' ? getDocAmount(doc) : (parseFloat(doc.advance) || 0));
+        return acc;
     }, 0);
 
-    // B. RESTE À RECOUVRER (CRÉANCES)
-    // = Total des FACTURES EN ATTENTE - Acomptes déjà versés
     const totalPending = validDocs
         .filter(d => d.type === 'FACTURE' && d.status === 'PENDING')
-        .reduce((acc, doc) => {
-            const totalTTC = getDocAmount(doc);
-            const alreadyPaid = parseFloat(doc.advance) || 0;
-            const reste = Math.max(0, totalTTC - alreadyPaid);
-            return acc + reste;
-        }, 0);
+        .reduce((acc, doc) => acc + Math.max(0, getDocAmount(doc) - (parseFloat(doc.advance) || 0)), 0);
 
-    // C. CHIFFRE D'AFFAIRES (VOLUME FACTURÉ)
-    // = Somme totale de toutes les FACTURES émises (payées ou non)
-    const totalRevenue = validDocs
-        .filter(d => d.type === 'FACTURE')
-        .reduce((acc, d) => acc + getDocAmount(d), 0);
-
-    // --- 4. ACTIVITÉ RÉCENTE ---
+    const totalRevenue = validDocs.filter(d => d.type === 'FACTURE').reduce((acc, d) => acc + getDocAmount(d), 0);
     const recentDocs = [...validDocs].reverse().slice(0, 5);
 
     return (
-        <div className="h-full bg-gray-100 p-8 overflow-y-auto font-sans custom-scrollbar">
-            <div className="max-w-6xl mx-auto space-y-8">
+        <div className="h-full bg-base-200 p-8 overflow-y-auto font-sans text-base-content">
+            <div className="max-w-6xl mx-auto space-y-8 pb-20">
                 
                 {/* EN-TÊTE */}
-                <div className="flex justify-between items-center">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                     <div>
-                        <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                            <FileText className="w-8 h-8 text-blue-600" /> Tableau de Bord
+                        <h2 className="text-3xl font-bold text-base-content flex items-center gap-2">
+                           Tableau de Bord
                         </h2>
-                        <p className="text-gray-500 text-sm mt-1">
-                            Vue d'ensemble • {validDocs.length} document(s) enregistré(s)
+                        <p className="text-base-content/60 text-sm">
+                            Vue d'ensemble • {validDocs.length} document(s)
                         </p>
                     </div>
-
-                    <div className="flex items-center gap-3">
-                        <button 
-                            onClick={() => setView('editor')} 
-                            className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 shadow-sm transition"
-                        >
-                            <ArrowLeft className="w-4 h-4" /> Retour éditeur
+                    <div className="flex gap-2">
+                        <button onClick={() => setView('editor')} className="btn btn-ghost btn-sm text-base-content font-bold border-base-300 bg-base-100">
+                            <ArrowLeft className="w-4 h-4" /> Retour
                         </button>
-                        <button 
-                            onClick={() => setView('editor')} 
-                            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 shadow-sm transition"
-                        >
+                        <button onClick={() => setView('editor')} className="btn btn-primary btn-sm text-white shadow-md">
                             Nouveau <Plus className="w-4 h-4" />
                         </button>
                     </div>
                 </div>
 
-                {/* KPI CARDS */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {/* KPI STATS - CORRECTION ICONES PALES */}
+                <div className="stats shadow-sm w-full bg-base-100 text-base-content grid-cols-1 md:grid-cols-3 border border-base-200">
                     
-                    {/* CASH (TRESORERIE) */}
-                    <div className="bg-white p-5 rounded-xl shadow-sm border-b-4 border-green-500">
-                        <div className="flex justify-between items-start mb-2">
-                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Trésorerie Réelle</p>
-                            <div className="p-2 bg-green-50 rounded text-green-600"><Wallet className="w-5 h-5" /></div>
+                    <div className="stat">
+                        {/* CORRECTION ICI : text-emerald-500 sans opacité */}
+                        <div className="stat-figure text-emerald-500">
+                            <Wallet className="w-12 h-12" />
                         </div>
-                        <h3 className="text-2xl font-extrabold text-slate-800">{formatMoney(totalCash)}</h3>
-                        <p className="text-[10px] text-green-600 font-bold mt-1 flex items-center gap-1">
-                            <TrendingUp className="w-3 h-3" /> Encaissé (Cash + Banque)
-                        </p>
+                        <div className="stat-title font-bold uppercase tracking-wider text-base-content/60 text-xs">Trésorerie (Cash)</div>
+                        <div className="stat-value text-emerald-700 text-2xl lg:text-3xl">{formatMoney(totalCash)}</div>
+                        <div className="stat-desc text-emerald-700 font-bold flex items-center gap-1 mt-1">
+                            <TrendingUp className="w-3 h-3" /> Encaissé réellement
+                        </div>
                     </div>
-
-                    {/* IMPAYÉS (CREANCES) */}
-                    <div className="bg-white p-5 rounded-xl shadow-sm border-b-4 border-orange-500">
-                        <div className="flex justify-between items-start mb-2">
-                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Reste à percevoir</p>
-                            <div className="p-2 bg-orange-50 rounded text-orange-500"><AlertCircle className="w-5 h-5" /></div>
+                    
+                    <div className="stat">
+                        {/* CORRECTION ICI : text-amber-500 sans opacité */}
+                        <div className="stat-figure text-amber-500">
+                            <AlertCircle className="w-12 h-12" />
                         </div>
-                        <h3 className="text-2xl font-extrabold text-slate-800">{formatMoney(totalPending)}</h3>
-                        <p className="text-[10px] text-orange-500 font-bold mt-1">En attente de règlement</p>
+                        <div className="stat-title font-bold uppercase tracking-wider text-base-content/60 text-xs">Reste à percevoir</div>
+                        <div className="stat-value text-amber-600 text-2xl lg:text-3xl">{formatMoney(totalPending)}</div>
+                        <div className="stat-desc text-amber-600 font-bold mt-1">Créances clients</div>
                     </div>
-
-                    {/* CA (VOLUME) */}
-                    <div className="bg-white p-5 rounded-xl shadow-sm border-b-4 border-blue-500">
-                        <div className="flex justify-between items-start mb-2">
-                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Chiffre d'Affaires</p>
-                            <div className="p-2 bg-blue-50 rounded text-blue-500"><CreditCard className="w-5 h-5" /></div>
+                    
+                    <div className="stat">
+                        {/* CORRECTION ICI : text-blue-500 sans opacité */}
+                        <div className="stat-figure text-blue-500">
+                            <FileText className="w-12 h-12" />
                         </div>
-                        <h3 className="text-2xl font-extrabold text-slate-800">{formatMoney(totalRevenue)}</h3>
-                        <p className="text-[10px] text-blue-500 font-bold mt-1">Total facturé (Émis)</p>
+                        <div className="stat-title font-bold uppercase tracking-wider text-base-content/60 text-xs">Chiffre d'Affaires</div>
+                        <div className="stat-value text-blue-700 text-2xl lg:text-3xl">{formatMoney(totalRevenue)}</div>
+                        <div className="stat-desc text-blue-700 font-bold mt-1">Volume facturé total</div>
                     </div>
                 </div>
 
-                {/* LISTES */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                    
                     {/* ACTIVITÉ RÉCENTE */}
-                    <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100 flex flex-col overflow-hidden">
-                        <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                            <h4 className="font-bold text-gray-700 text-xs uppercase flex items-center gap-2">
-                                Activité Récente
-                            </h4>
-                            <button onClick={() => setView('history')} className="text-xs text-blue-600 font-bold hover:underline">Voir tout l'historique</button>
-                        </div>
-                        
-                        <div className="divide-y divide-gray-100">
-                            {recentDocs.length === 0 ? (
-                                <div className="p-8 text-center text-gray-400 text-sm">Aucun document récent.</div>
-                            ) : (
-                                recentDocs.map((doc, idx) => {
-                                    const clientName = doc.recipient?.name || 'Client Inconnu';
-                                    const dateStr = doc.date ? new Date(doc.date).toLocaleDateString() : '-';
-                                    
-                                    // Calcul sécurisé pour l'affichage
-                                    const docTotal = getDocAmount(doc);
-                                    let amountDisplay = formatMoney(docTotal);
-                                    if (doc.type === 'RECU') amountDisplay = "+" + amountDisplay;
+                    <div className="card bg-base-100 shadow-sm border border-base-200 lg:col-span-2">
+                        <div className="card-body p-0">
+                            <div className="p-4 border-b border-base-200 flex justify-between items-center bg-base-100">
+                                <h4 className="font-bold text-xs uppercase opacity-70 text-base-content">Activité Récente</h4>
+                                <button onClick={() => setView('history')} className="link link-primary text-xs font-bold no-underline">Tout voir</button>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="table table-zebra w-full">
+                                    <tbody>
+                                        {recentDocs.length === 0 ? (
+                                            <tr><td className="text-center p-8 opacity-50 text-base-content">Aucun document.</td></tr>
+                                        ) : (
+                                            recentDocs.map((doc, idx) => {
+                                                const amount = getDocAmount(doc);
+                                                let display = formatMoney(amount);
+                                                if(doc.type === 'RECU') display = "+" + display;
+                                                const isPaid = doc.status === 'PAID' || doc.type === 'RECU';
 
-                                    const isPaid = doc.status === 'PAID' || doc.type === 'RECU';
-                                    const isRecu = doc.type === 'RECU';
-                                    const isDevis = doc.type === 'DEVIS';
-                                    
-                                    // Détection d'acompte sur facture non payée
-                                    const hasAdvance = !isRecu && !isDevis && doc.status === 'PENDING' && (parseFloat(doc.advance) > 0);
-
-                                    return (
-                                        <div key={doc.docId || idx} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                                            <div className="flex items-center gap-4">
-                                                <div className={`w-8 h-8 rounded flex items-center justify-center font-bold text-[10px] text-white ${isRecu ? 'bg-green-500' : (isDevis ? 'bg-gray-400' : 'bg-blue-600')}`}>
-                                                    {isRecu ? 'RC' : (isDevis ? 'DV' : 'FA')}
-                                                </div>
-                                                <div>
-                                                    <p className="text-sm font-bold text-gray-800">{clientName}</p>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-[10px] text-gray-500">N° {doc.number}</span>
-                                                        <span className="text-[10px] text-gray-400">• {dateStr}</span>
-                                                        {hasAdvance && <span className="text-[9px] bg-green-100 text-green-700 px-1.5 rounded font-bold">Avance reçue</span>}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div className="text-right">
-                                                <p className="text-sm font-mono font-bold text-slate-700">{amountDisplay}</p>
-                                                <div className={`text-[9px] font-bold inline-flex items-center gap-1 ${isPaid ? 'text-green-600' : 'text-orange-500'}`}>
-                                                    {isPaid ? <CheckSquare className="w-3 h-3"/> : <Square className="w-3 h-3"/>}
-                                                    {isPaid ? 'PAYÉ' : 'EN ATTENTE'}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    );
-                                })
-                            )}
+                                                return (
+                                                    <tr key={idx} className="hover">
+                                                        <td>
+                                                            <div className="flex items-center gap-3">
+                                                                <div className={`badge badge-sm font-bold border-none text-white ${doc.type === 'RECU' ? 'bg-emerald-600' : doc.type === 'DEVIS' ? 'bg-gray-500' : 'bg-blue-600'}`}>
+                                                                    {doc.type === 'RECU' ? 'RC' : doc.type === 'DEVIS' ? 'DV' : 'FA'}
+                                                                </div>
+                                                                <div>
+                                                                    <div className="font-bold text-sm text-base-content">{doc.recipient?.name}</div>
+                                                                    <div className="text-[10px] opacity-60 text-base-content">{doc.number} • {new Date(doc.date).toLocaleDateString()}</div>
+                                                                </div>
+                                                            </div>
+                                                        </td>
+                                                        <td className="text-right font-mono font-bold text-base-content">
+                                                            {display}
+                                                        </td>
+                                                        <td className="text-right">
+                                                            <span className={`badge badge-xs font-bold py-2 border-none ${isPaid ? 'bg-green-600 text-white' : 'bg-yellow-100 text-yellow-800'}`}>
+                                                                {isPaid ? 'PAYÉ' : 'ATTENTE'}
+                                                            </span>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
 
                     {/* LISTE CLIENTS RAPIDE */}
-                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 h-fit">
-                        <div className="flex justify-between items-center mb-4">
-                            <h4 className="font-bold text-gray-700 text-xs uppercase flex items-center gap-2">
-                                <User className="w-4 h-4" /> Clients
-                            </h4>
-                            <span className="bg-gray-100 text-gray-600 text-[10px] font-bold px-2 py-1 rounded-full">{clients.length}</span>
+                    <div className="card bg-base-100 shadow-sm border border-base-200 h-fit">
+                        <div className="card-body p-5">
+                            <div className="flex justify-between items-center mb-4">
+                                <h4 className="font-bold text-xs uppercase opacity-70 flex items-center gap-2 text-base-content">
+                                    <Users className="w-4 h-4" /> Clients
+                                </h4>
+                                <span className="badge badge-neutral badge-sm text-white">{clients.length}</span>
+                            </div>
+                            <ul className="menu bg-base-200 rounded-box text-base-content mb-4">
+                                {clients.slice(0, 5).map((client, idx) => (
+                                    <li key={idx}><a className="flex justify-between text-xs font-bold">
+                                        <span className="truncate max-w-[120px]">{client.name}</span>
+                                        <span className="opacity-50 font-normal">{client.phone}</span>
+                                    </a></li>
+                                ))}
+                                {clients.length === 0 && <li className="disabled text-base-content/50"><a>Aucun client</a></li>}
+                            </ul>
+                            <button onClick={() => setView('clients')} className="btn btn-outline btn-primary btn-sm w-full">
+                                Gérer les clients
+                            </button>
                         </div>
-                        <div className="space-y-3">
-                            {clients.slice(0, 5).map((client, idx) => (
-                                <div key={client.id || idx} className="flex items-center justify-between text-sm p-2 bg-gray-50 rounded hover:bg-blue-50 transition-colors">
-                                    <span className="text-gray-700 font-bold truncate w-2/3" title={client.name}>{client.name}</span>
-                                    {client.phone && <span className="text-xs text-gray-400">{client.phone}</span>}
-                                </div>
-                            ))}
-                            {clients.length === 0 && <p className="text-xs text-gray-400 italic">Aucun client enregistré.</p>}
-                        </div>
-                        <button onClick={() => setView('clients')} className="mt-6 w-full py-2 bg-white text-blue-600 border border-blue-200 hover:bg-blue-50 rounded-lg text-xs font-bold transition">
-                            Gérer la liste clients
-                        </button>
                     </div>
                 </div>
-
             </div>
         </div>
     );

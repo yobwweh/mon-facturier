@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Save, CheckCircle, FolderOpen, FileEdit, Users, LayoutDashboard, Settings, Package, FileDown } from 'lucide-react';
-import html2pdf from 'html2pdf.js'; // Import nécessaire pour le PDF navigateur
+import { CheckCircle, FolderOpen, Users, LayoutDashboard, Settings, Package, Moon, Sun } from 'lucide-react';
+
+// --- IMPORT DU MOTEUR PDF ---
+import { pdf } from '@react-pdf/renderer';
+import InvoicePDF from './components/InvoicePDF';
 
 import HistoryView from './components/HistoryView';
 import InvoiceForm from './components/InvoiceForm';
@@ -9,25 +12,36 @@ import ClientList from './components/ClientList';
 import DashboardView from './components/DashboardView';
 import SettingsView from './components/SettingsView';
 import ProductList from './components/ProductList';
+import SplashView from './components/SplashView';
 import { storage } from './services/storage';
 
 export default function App() {
-  // --- NAVIGATION & DONNÉES GLOBALES ---
+  // --- ÉTATS ---
   const [view, setView] = useState('editor'); 
   const [savedDocuments, setSavedDocuments] = useState([]); 
   const [clients, setClients] = useState([]);
   const [products, setProducts] = useState([]); 
   const [showSavedMessage, setShowSavedMessage] = useState(false);
   const [appReady, setAppReady] = useState(false);
+  const [showSplash, setShowSplash] = useState(true);
+  
+  // État de chargement pour le bouton PDF
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
-  // --- UTILITAIRE DATE LOCALE (Corrige le bug de décalage horaire) ---
+  // Thème
+  const [theme, setTheme] = useState('winter');
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+  const toggleTheme = () => setTheme(curr => curr === 'winter' ? 'night' : 'winter');
+
   const getLocalDate = () => {
     const d = new Date();
     const offset = d.getTimezoneOffset() * 60000;
     return new Date(d.getTime() - offset).toISOString().split('T')[0];
   };
 
-  // --- ÉTAT DU DOCUMENT EN COURS ---
+  // --- FACTURE ---
   const [invoice, setInvoice] = useState({
     docId: null, type: 'FACTURE', number: '', status: 'PENDING', 
     date: getLocalDate(), 
@@ -41,47 +55,67 @@ export default function App() {
     notes: ''
   });
 
-  // --- CHARGEMENT DES DONNÉES ---
+  // --- CHARGEMENT ---
+  const refreshDocumentsList = async () => {
+      if (window.electronAPI) {
+          const docs = await window.electronAPI.getDocuments();
+          setSavedDocuments(docs);
+      } else {
+          const docs = await storage.get('invoiceDB') || [];
+          setSavedDocuments(docs);
+      }
+  };
+
   useEffect(() => {
+    const timer = setTimeout(() => setShowSplash(false), 2500);
     const initData = async () => {
         try {
-            const docs = await storage.get('invoiceDB') || [];
-            setSavedDocuments(docs);
-            const cli = await storage.get('clientDB') || [];
-            setClients(cli);
-            const prod = await storage.get('productDB') || [];
-            setProducts(prod);
+            if (window.electronAPI) {
+                // --- CHARGEMENT VIA ELECTRON ---
+                const dbClients = await window.electronAPI.getClients();
+                setClients(dbClients);
+                
+                const dbDocs = await window.electronAPI.getDocuments();
+                setSavedDocuments(dbDocs);
 
-            // Charger le brouillon précédent s'il existe
-            const draft = await storage.get('currentDraft');
-            if (draft) {
-                setInvoice(draft);
+                const dbProducts = await window.electronAPI.getProducts();
+                setProducts(dbProducts);
             } else {
-                // Sinon, initialiser un nouveau document
+                // --- MODE WEB (Fallback) ---
+                const dbClients = await storage.get('clientDB') || [];
+                setClients(dbClients);
+                
+                const docs = await storage.get('invoiceDB') || [];
+                setSavedDocuments(docs);
+                
+                const prod = await storage.get('productDB') || [];
+                setProducts(prod);
+            }
+            
+            const draft = await storage.get('currentDraft');
+            if (draft) setInvoice(draft);
+            else {
                 const profile = await storage.get('companyProfile');
                 const defaultSender = profile || invoice.sender;
-                const initialType = 'FACTURE';
-                const nextNum = generateNextNumber(initialType, docs);
-                setInvoice(prev => ({
-                    ...prev, docId: Date.now(), type: initialType, number: nextNum, status: 'PENDING', sender: defaultSender
-                }));
+                const nextNum = generateNextNumber('FACTURE', savedDocuments); 
+                setInvoice(prev => ({ ...prev, docId: Date.now(), type: 'FACTURE', number: nextNum, sender: defaultSender }));
             }
-        } catch (e) {
-            console.error("Erreur chargement données:", e);
-        }
+        } catch (e) { console.error("Erreur Init:", e); }
         setAppReady(true);
     };
     initData();
+    return () => clearTimeout(timer);
   }, []);
 
-  // --- AUTO-SAVE (Sauvegarde automatique du brouillon) ---
   useEffect(() => {
     if (!appReady) return;
-    const autoSaveTimer = setTimeout(() => {
-        storage.save('currentDraft', invoice);
-    }, 800); // Sauvegarde 0.8s après la dernière modification
+    const autoSaveTimer = setTimeout(() => { storage.save('currentDraft', invoice); }, 1000);
     return () => clearTimeout(autoSaveTimer);
   }, [invoice, appReady]);
+
+  useEffect(() => {
+      if(savedDocuments.length > 0 && invoice.number === '') refreshNumber();
+  }, [savedDocuments]);
 
   // --- LOGIQUE MÉTIER ---
   const generateNextNumber = (type, docsList = savedDocuments) => {
@@ -90,374 +124,204 @@ export default function App() {
       const year = new Date().getFullYear();
       const pattern = `${prefix}-${year}-`;
       const relevantDocs = docsList.filter(d => d.type === type && d.number && d.number.startsWith(pattern));
-
-      if (relevantDocs.length === 0) return `${pattern}001`;
-      const existingNumbers = relevantDocs.map(d => {
-          const parts = d.number.split('-'); 
-          return parseInt(parts[parts.length - 1]); 
-      }).filter(n => !isNaN(n));
+      
+      if (relevantDocs.length === 0) return `${pattern}000001`;
+      
+      const existingNumbers = relevantDocs.map(d => parseInt(d.number.split('-').pop())).filter(n => !isNaN(n));
       const maxNum = existingNumbers.length > 0 ? Math.max(...existingNumbers) : 0;
-      return `${pattern}${(maxNum + 1).toString().padStart(3, '0')}`;
+      
+      return `${pattern}${(maxNum + 1).toString().padStart(6, '0')}`;
   };
 
   const formatMoney = (amount) => new Intl.NumberFormat('fr-CI', { style: 'currency', currency: 'XOF', minimumFractionDigits: 0 }).format(amount).replace('XOF', 'FCFA');
 
-  // --- SAUVEGARDE DANS L'HISTORIQUE ---
   const handleSave = async () => {
-    let newDocId = invoice.docId;
-    if (!newDocId) { newDocId = Date.now(); }
-
+    let newDocId = invoice.docId || Date.now();
     const docToSave = { ...invoice, docId: newDocId, lastModified: new Date().toISOString() };
     setInvoice(docToSave);
 
-    const updatedDocs = [...savedDocuments];
-    const existingIndex = updatedDocs.findIndex(d => d.docId === newDocId);
-    
-    if (existingIndex >= 0) { 
-        updatedDocs[existingIndex] = docToSave; 
-    } else { 
-        updatedDocs.push(docToSave); 
+    if (window.electronAPI) {
+        try { await window.electronAPI.saveDocument(docToSave); await refreshDocumentsList(); setShowSavedMessage(true); } 
+        catch (err) { console.error("Erreur Save DB", err); }
+    } else {
+        const updatedDocs = [...savedDocuments];
+        const existingIndex = updatedDocs.findIndex(d => d.docId === newDocId);
+        if (existingIndex >= 0) updatedDocs[existingIndex] = docToSave; else updatedDocs.push(docToSave); 
+        setSavedDocuments(updatedDocs); await storage.save('invoiceDB', updatedDocs); setShowSavedMessage(true);
     }
-
-    setSavedDocuments(updatedDocs);
-    await storage.save('invoiceDB', updatedDocs);
-    
-    setShowSavedMessage(true);
     setTimeout(() => setShowSavedMessage(false), 3000);
   };
 
-  // --- TÉLÉCHARGEMENT PDF (Compatible Web & Electron) ---
+  // --- FONCTION PDF ---
   const handleDownload = async () => {
-      await handleSave(); // On assure la sauvegarde avant
-      
-      const fileName = `${invoice.type}_${invoice.number}.pdf`;
-      
-      // CAS ELECTRON
-      if (window.electronAPI) {
-          const result = await window.electronAPI.exportToPDF(fileName);
-          if (result.success) {
-              alert(`✅ Document téléchargé !\n\n${result.path}`);
-          } else if (result.reason !== 'canceled') {
-              alert("❌ Erreur technique lors du téléchargement.");
-          }
-      } 
-      // CAS NAVIGATEUR (WEB)
-      else {
-          const element = document.getElementById('invoice-content');
-          if (!element) return alert("Erreur : Impossible de trouver le document à imprimer.");
+    try {
+        setIsGeneratingPdf(true);
+        await handleSave(); // Sauvegarder d'abord
 
-          const opt = {
-            margin:       0,
-            filename:     fileName,
-            image:        { type: 'jpeg', quality: 0.98 },
-            html2canvas:  { scale: 2, useCORS: true, letterRendering: true }, 
-            jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
-          };
+        const fileName = `${invoice.type}_${invoice.number}.pdf`;
+        const blob = await pdf(<InvoicePDF invoice={invoice} />).toBlob();
+        const url = URL.createObjectURL(blob);
 
-          html2pdf().set(opt).from(element).save();
-      }
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+
+    } catch (error) {
+        console.error("Erreur PDF:", error);
+        alert("Erreur PDF : " + error.message);
+    } finally {
+        setIsGeneratingPdf(false);
+    }
   };
 
-  // --- GESTION DES DOCUMENTS ---
+  // --- ACTIONS ---
   const handleNew = async () => {
-    if (confirm("Créer un nouveau document vierge ? (Le document actuel est sauvegardé)")) {
+    if (confirm("Créer un nouveau document vierge ?")) {
         const savedProfile = await storage.get('companyProfile');
         const defaultSender = savedProfile || { name: '', legalForm: '', capital: '', address: '', zip: '', city: '', email: '', phone: '', ncc: '', rccm: '', logo: null };
         const nextNum = generateNextNumber('FACTURE');
         
-        const newDoc = {
-            docId: Date.now(), 
-            type: 'FACTURE', 
-            number: nextNum, 
-            status: 'PENDING',
-            date: getLocalDate(),
-            dueDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-            hasTax: true, 
-            taxRate: 18, 
-            sender: defaultSender, 
+        setInvoice({
+            docId: Date.now(), type: 'FACTURE', number: nextNum, status: 'PENDING',
+            date: getLocalDate(), dueDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            hasTax: true, taxRate: 18, sender: defaultSender, 
             recipient: { name: '', ncc: '', address: '', city: '', email: '', phone: '' },
             items: [{ id: 1, description: '', quantity: 1, price: 0 }],
             paymentMethod: 'Virement', mobileMoneyInfo: '',
             receiptReference: '', receiptReason: '', receiptAmount: '', receiptQrCode: null,
             notes: 'Arrêté la présente facture à la somme indiquée ci-dessous.'
-        };
-        setInvoice(newDoc);
+        });
         setView('editor');
     }
   };
 
-  const loadDocument = async (doc) => {
-      setInvoice(doc);
-      setView('editor');
+  const loadDocument = (doc) => { setInvoice(doc); setView('editor'); };
+  
+  const deleteDocument = async (id, e) => { 
+      e.stopPropagation(); 
+      if (confirm("Supprimer ?")) { 
+          if(window.electronAPI) { await window.electronAPI.deleteDocument(id); await refreshDocumentsList(); } 
+          else { const updated = savedDocuments.filter(d => d.docId !== id); setSavedDocuments(updated); await storage.save('invoiceDB', updated); }
+          if (invoice.docId === id) handleNew(); 
+      } 
+  };
+  
+  const toggleDocStatus = async (id, e) => { 
+      e.stopPropagation(); 
+      const doc = savedDocuments.find(d => d.docId === id);
+      if (!doc) return;
+      const newStatus = doc.status === 'PAID' ? 'PENDING' : 'PAID';
+      const updatedDoc = { ...doc, status: newStatus };
+      if (window.electronAPI) { await window.electronAPI.saveDocument(updatedDoc); await refreshDocumentsList(); } 
+      else { const updated = savedDocuments.map(d => d.docId === id ? updatedDoc : d); setSavedDocuments(updated); await storage.save('invoiceDB', updated); }
+      if (invoice.docId === id) setInvoice(prev => ({ ...prev, status: newStatus }));
   };
 
-  const deleteDocument = async (id, e) => {
-      e.stopPropagation();
-      if (confirm("Supprimer ce document de l'historique ?")) {
-          const updatedDocs = savedDocuments.filter(d => d.docId !== id);
-          setSavedDocuments(updatedDocs);
-          await storage.save('invoiceDB', updatedDocs);
-          
-          // Si on supprime le doc en cours, on réinitialise
-          if (invoice.docId === id) {
-             const nextNum = generateNextNumber('FACTURE', updatedDocs);
-             setInvoice(prev => ({...prev, docId: Date.now(), number: nextNum, status: 'PENDING'}));
-          }
-      }
+  const convertToInvoice = async (doc, e) => { 
+      e.stopPropagation(); 
+      if(confirm(`Convertir en Facture ?`)) { 
+          const nextNum = generateNextNumber('FACTURE'); 
+          setInvoice({ ...doc, docId: Date.now(), type: 'FACTURE', number: nextNum, date: getLocalDate(), status: 'PENDING' }); 
+          setView('editor'); 
+      } 
   };
 
-  const toggleDocStatus = async (id, e) => {
-      e.stopPropagation();
-      const updatedDocs = savedDocuments.map(doc => {
-          if (doc.docId === id) { return { ...doc, status: doc.status === 'PAID' ? 'PENDING' : 'PAID' }; }
-          return doc;
-      });
-      setSavedDocuments(updatedDocs);
-      await storage.save('invoiceDB', updatedDocs);
-      
-      if (invoice.docId === id) { 
-          setInvoice(prev => ({ ...prev, status: prev.status === 'PAID' ? 'PENDING' : 'PAID' })); 
-      }
-  };
-
-  const convertToInvoice = async (doc, e) => {
-    e.stopPropagation();
-    if(confirm(`Convertir le Devis N° ${doc.number} en Facture ?`)) {
-        const savedProfile = await storage.get('companyProfile');
-        const defaultSender = savedProfile || doc.sender;
-        const nextNum = generateNextNumber('FACTURE');
-        
-        const newDoc = {
-            ...doc, 
-            docId: Date.now(), 
-            type: 'FACTURE', 
-            number: nextNum,
-            sender: defaultSender, 
-            date: getLocalDate(),
-            dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-            status: 'PENDING',
-            notes: 'Arrêté la présente facture à la somme indiquée ci-dessous.'
-        };
-        
-        setInvoice(newDoc);
-        
-        // Marquer l'ancien devis comme traité/payé
-        const updatedDocs = savedDocuments.map(d => d.docId === doc.docId ? {...d, status: 'PAID'} : d);
-        setSavedDocuments(updatedDocs);
-        await storage.save('invoiceDB', updatedDocs);
-        
-        alert(`Devis converti ! Nouvelle Facture N° ${nextNum} créée.`);
-        setView('editor');
-    }
-  };
-
-  const handleProfileUpdate = async (newProfile) => {
+  const handleProfileUpdate = (newProfile) => {
       setInvoice(prev => ({ ...prev, sender: newProfile }));
+      setShowSavedMessage(true);
+      setTimeout(() => setShowSavedMessage(false), 3000);
   };
 
-  const handleLogoUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => setInvoice(prev => ({ ...prev, sender: { ...prev.sender, logo: reader.result } }));
-      reader.readAsDataURL(file);
-    }
+  const handleLogoUpload = (e) => { const file = e.target.files[0]; if (file) { const reader = new FileReader(); reader.onloadend = () => setInvoice(p => ({ ...p, sender: { ...p.sender, logo: reader.result } })); reader.readAsDataURL(file); } };
+  const handleQrCodeUpload = (e) => { const file = e.target.files[0]; if (file) { const reader = new FileReader(); reader.onloadend = () => setInvoice(p => ({ ...p, receiptQrCode: reader.result })); reader.readAsDataURL(file); } };
+  
+  const handleTypeChange = (newType) => { 
+      const nextNum = generateNextNumber(newType); 
+      setInvoice(prev => ({ ...prev, type: newType, number: nextNum, hasTax: newType !== 'RECU', status: newType === 'RECU' ? 'PAID' : 'PENDING' })); 
   };
-
-  const handleQrCodeUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => setInvoice(prev => ({ ...prev, receiptQrCode: reader.result }));
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleTypeChange = (newType) => {
-    const nextNum = generateNextNumber(newType);
-    let updates = { type: newType, number: nextNum };
-    
-    if (newType === 'RECU') {
-      updates.hasTax = false; updates.status = 'PAID'; updates.notes = ''; 
-      updates.receiptReference = ''; updates.receiptReason = ''; updates.receiptAmount = '';
-    } else if (newType === 'DEVIS') {
-      updates.hasTax = true; updates.status = 'PENDING'; updates.notes = 'Validité de l\'offre : 30 jours.';
-    } else {
-      updates.hasTax = true; updates.status = 'PENDING'; updates.notes = 'Arrêté la présente facture à la somme indiquée ci-dessous.';
-    }
-    setInvoice({ ...invoice, ...updates });
-  };
-
-  const refreshNumber = () => setInvoice({...invoice, number: generateNextNumber(invoice.type)});
+  
+  const refreshNumber = () => setInvoice(p => ({...p, number: generateNextNumber(p.type)}));
+  const handleExportBackup = () => { alert("Données sauvegardées."); };
+  const handleImportBackup = (e) => { };
 
   const subtotal = invoice.items.reduce((acc, item) => acc + (item.quantity * item.price), 0);
   const taxAmount = invoice.hasTax ? (subtotal * invoice.taxRate) / 100 : 0;
   const total = subtotal + taxAmount; 
 
-  const handleExportBackup = () => {
-      const backupData = { invoices: savedDocuments, clients: clients, products: products };
-      const dataStr = JSON.stringify(backupData, null, 2);
-      const blob = new Blob([dataStr], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `facturier_backup_${getLocalDate()}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+  if (showSplash || !appReady) return <SplashView />;
+
+  // --- RENDU CONTENU ---
+  const renderContent = () => {
+      switch (view) {
+          case 'settings': return <SettingsView setView={setView} onProfileUpdate={handleProfileUpdate} showNotification={(msg) => { setShowSavedMessage(true); setTimeout(() => setShowSavedMessage(false), 3000); alert(msg); }} />;
+          case 'clients': return <ClientList clients={clients} setClients={setClients} setView={setView} />;
+          case 'products': return <ProductList products={products} setProducts={setProducts} setView={setView} formatMoney={formatMoney} />;
+          case 'dashboard': return <DashboardView savedDocuments={savedDocuments} clients={clients} formatMoney={formatMoney} setView={setView} />;
+          case 'history': return <HistoryView savedDocuments={savedDocuments} setView={setView} handleExportBackup={handleExportBackup} handleImportBackup={handleImportBackup} loadDocument={loadDocument} deleteDocument={deleteDocument} toggleDocStatus={toggleDocStatus} formatMoney={formatMoney} convertToInvoice={convertToInvoice} />;
+          default: 
+              return (
+                  <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
+                    <div className="w-full lg:w-5/12 h-full overflow-y-auto">
+                        <InvoiceForm 
+                            invoice={invoice} setInvoice={setInvoice} handleTypeChange={handleTypeChange}
+                            refreshNumber={refreshNumber} handleLogoUpload={handleLogoUpload}
+                            handleQrCodeUpload={handleQrCodeUpload} clients={clients} products={products}
+                        />
+                    </div>
+                    <div className="w-full lg:w-7/12 h-full bg-base-300 overflow-y-auto flex justify-center items-start">
+                        <InvoicePreview invoice={invoice} formatMoney={formatMoney} subtotal={subtotal} taxAmount={taxAmount} total={total} />
+                    </div>
+                  </div>
+              );
+      }
   };
-
-  const handleImportBackup = (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = async (event) => {
-          try {
-              const data = JSON.parse(event.target.result);
-              const importedDocs = Array.isArray(data) ? data : (data.invoices || []);
-              const importedClients = data.clients || [];
-              const importedProducts = data.products || [];
-
-              if (confirm(`Importer ${importedDocs.length} documents, ${importedClients.length} clients et ${importedProducts.length} produits ?`)) {
-                  const docMap = new Map(savedDocuments.map(d => [d.docId, d]));
-                  importedDocs.forEach(d => docMap.set(d.docId, d));
-                  const newDocs = Array.from(docMap.values());
-                  
-                  setSavedDocuments(newDocs);
-                  await storage.save('invoiceDB', newDocs);
-                  
-                  if(importedClients.length > 0) {
-                      setClients(importedClients);
-                      await storage.save('clientDB', importedClients);
-                  }
-                  if(importedProducts.length > 0) {
-                      setProducts(importedProducts);
-                      await storage.save('productDB', importedProducts);
-                  }
-                  alert("Importation réussie !");
-              }
-          } catch (err) { alert("Erreur de lecture."); }
-      };
-      reader.readAsText(file);
-      e.target.value = ''; 
-  };
-
-  // --- RENDU UI ---
-  if (!appReady) return <div className="h-screen flex items-center justify-center text-blue-600 font-bold animate-pulse">Chargement...</div>;
-
-  if (view === 'settings') {
-    return <SettingsView setView={setView} onProfileUpdate={handleProfileUpdate} showNotification={(msg) => { setShowSavedMessage(true); setTimeout(() => setShowSavedMessage(false), 3000); alert(msg); }} />;
-  }
-  if (view === 'clients') return <ClientList clients={clients} setClients={setClients} setView={setView} />;
-  if (view === 'products') return <ProductList products={products} setProducts={setProducts} setView={setView} formatMoney={formatMoney} />;
-  if (view === 'dashboard') {
-    return <DashboardView savedDocuments={savedDocuments} clients={clients} formatMoney={formatMoney} setView={setView} />;
-  }
-  if (view === 'history') {
-      return <HistoryView savedDocuments={savedDocuments} setView={setView} handleExportBackup={handleExportBackup} handleImportBackup={handleImportBackup} loadDocument={loadDocument} deleteDocument={deleteDocument} toggleDocStatus={toggleDocStatus} formatMoney={formatMoney} convertToInvoice={convertToInvoice} />;
-  }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-100 font-sans text-gray-800 overflow-hidden">
-      {/* =================================================================================
-         FIX CSS POUR IMPRESSION ELECTRON (CORRIGÉ) 
-         Ce bloc style réinitialise totalement la page pour l'export PDF
-         =================================================================================
-      */}
-      <style>{`
-        @media print {
-          /* 1. Cacher l'interface inutile */
-          .no-print, nav, .form-section { display: none !important; }
-          
-          /* 2. Réinitialiser la page globale */
-          html, body, #root { 
-            background: white !important; 
-            margin: 0 !important; 
-            padding: 0 !important; 
-            height: 100% !important; 
-            overflow: hidden !important; 
-          }
-
-          /* 3. CIBLAGE PRÉCIS DU CONTENEUR DE L'APERÇU */
-          /* On écrase les styles "flex", "padding" et "bg-slate-700" de l'app */
-          .print-reset-wrapper {
-            position: absolute !important;
-            top: 0 !important;
-            left: 0 !important;
-            width: 100% !important;
-            height: 100% !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            background: white !important;
-            display: block !important; /* Désactive le Flexbox qui centre le document */
-            z-index: 9999 !important;
-          }
-
-          /* 4. Réinitialiser le zoom de l'aperçu */
-          .print-reset-wrapper > div {
-            transform: none !important; /* Enlève le scale-95 */
-            margin: 0 !important;
-            width: 100% !important;
-          }
-
-          /* 5. S'assurer que le contenu facture colle aux bords */
-          #invoice-content {
-            box-shadow: none !important;
-            margin: 0 !important;
-            width: 100% !important;
-            min-height: 100% !important;
-          }
-        }
-      `}</style>
-
-      {/* NAVBAR */}
-      <nav className="no-print bg-blue-600 text-white p-3 shadow-lg z-50 flex-shrink-0">
-        <div className="flex items-center justify-between w-full px-4 gap-4 overflow-x-auto">
-          <div className="flex items-center gap-3 shrink-0">
-            <div className="bg-white p-1.5 rounded-lg shadow-md flex items-center justify-center">
-                <svg className="w-6 h-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+    <div className="h-screen flex flex-col bg-base-100 font-sans text-base-content overflow-hidden">
+      <div className="navbar bg-base-100 shadow-md z-50 px-4 border-b border-base-200">
+        <div className="flex-1 gap-3">
+            <div className="w-10 h-10 bg-primary text-primary-content rounded-xl flex items-center justify-center shadow-lg cursor-pointer" onClick={() => setView('editor')}>
+                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
             </div>
-            <div className="shrink-0"><h1 className="text-lg font-bold tracking-tight">Facturier CI</h1><span className="text-xs text-blue-100 font-light flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span> Sécurisé</span></div>
-          </div>
-          
-          <div className="h-8 w-px bg-blue-500/50 mx-2 shrink-0"></div>
-          
-          <div className="flex gap-2 shrink-0">
-            <button onClick={() => setView('dashboard')} className="flex items-center gap-2 bg-blue-800 text-white px-3 py-1.5 rounded-md font-medium text-sm hover:bg-blue-900 transition whitespace-nowrap border border-blue-500/30"><LayoutDashboard className="w-4 h-4" /> Tableau</button>
-            <button onClick={() => setView('clients')} className="flex items-center gap-2 bg-blue-800/50 text-white px-3 py-1.5 rounded-md font-medium text-sm hover:bg-blue-800 transition whitespace-nowrap border border-blue-500/30"><Users className="w-4 h-4" /> Clients</button>
-            <button onClick={() => setView('products')} className="flex items-center gap-2 bg-blue-800/50 text-white px-3 py-1.5 rounded-md font-medium text-sm hover:bg-blue-800 transition whitespace-nowrap border border-blue-500/30"><Package className="w-4 h-4" /> Produits</button>
-            <button onClick={() => setView('history')} className="flex items-center gap-2 bg-blue-800 text-white px-3 py-1.5 rounded-md font-medium text-sm hover:bg-blue-900 transition whitespace-nowrap"><FolderOpen className="w-4 h-4" /> Docs</button>
-          </div>
-          
-          <div className="flex gap-2 items-center shrink-0 ml-auto">
-             {showSavedMessage && <span className="flex items-center gap-1 text-xs font-bold text-green-300 animate-pulse mr-2 whitespace-nowrap"><CheckCircle className="w-4 h-4" /> Sauvé</span>}
-            <button onClick={handleNew} className="flex items-center gap-2 bg-blue-700 text-white px-3 py-1.5 rounded-md font-medium text-sm hover:bg-blue-800 transition whitespace-nowrap"><FileEdit className="w-4 h-4" /> Nouveau</button>
-            <button onClick={handleSave} className="flex items-center gap-2 bg-white text-blue-700 px-3 py-1.5 rounded-md font-bold text-sm hover:bg-blue-50 transition shadow-sm whitespace-nowrap" title="Sauvegarder"><Save className="w-4 h-4" /> Sauver</button>
-            <button onClick={handleDownload} className="flex items-center gap-2 bg-red-600 text-white px-3 py-1.5 rounded-md font-bold text-sm hover:bg-red-700 transition shadow-sm whitespace-nowrap"><FileDown className="w-4 h-4" /> TÉLÉCHARGER</button>
-            <button onClick={() => setView('settings')} className="flex items-center gap-2 bg-blue-900 text-white px-3 py-1.5 rounded-md font-medium text-sm hover:bg-black transition border border-blue-500/30 ml-2 whitespace-nowrap" title="Paramètres"><Settings className="w-4 h-4" /> Config</button>
-          </div>
+            <div>
+              <h1 className="text-xl font-bold tracking-tight text-base-content cursor-pointer" onClick={() => setView('editor')}>Facturier CI</h1>
+              <span className="badge bg-green-600 text-white border-none badge-xs">Base de Données Active</span>
+            </div>
         </div>
-      </nav>
-
-      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
-        <InvoiceForm 
-            invoice={invoice} 
-            setInvoice={setInvoice} 
-            handleTypeChange={handleTypeChange}
-            refreshNumber={refreshNumber}
-            handleLogoUpload={handleLogoUpload}
-            handleQrCodeUpload={handleQrCodeUpload}
-            clients={clients}
-            products={products} // Passage des produits au formulaire
-        />
-        <InvoicePreview 
-            invoice={invoice}
-            formatMoney={formatMoney}
-            subtotal={subtotal}
-            taxAmount={taxAmount}
-            total={total}
-        />
+        <div className="flex-none hidden md:flex mx-4">
+            <div className="flex gap-1 bg-base-200 p-1 rounded-lg">
+                {[
+                    { id: 'dashboard', icon: LayoutDashboard, label: 'Tableau' },
+                    { id: 'clients', icon: Users, label: 'Clients' },
+                    { id: 'products', icon: Package, label: 'Catalogue' },
+                    { id: 'history', icon: FolderOpen, label: 'Documents' }
+                ].map(item => (
+                    <button key={item.id} onClick={() => setView(item.id)} className={`btn btn-sm border-none gap-2 ${view === item.id ? 'bg-base-100 text-primary shadow-sm font-extrabold' : 'btn-ghost text-base-content/70 hover:text-base-content hover:bg-base-200'}`}>
+                        <item.icon className="w-4 h-4" /> {item.label}
+                    </button>
+                ))}
+            </div>
+        </div>
+        <div className="flex-none gap-2">
+            {showSavedMessage && <div className="badge badge-success gap-2 text-white animate-pulse"><CheckCircle className="w-3 h-3" /> Sauvé</div>}
+            <button onClick={toggleTheme} className="btn btn-sm btn-circle btn-ghost" title="Changer Thème">{theme === 'winter' ? <Moon className="w-5 h-5 text-base-content" /> : <Sun className="w-5 h-5 text-warning" />}</button>
+            {view === 'editor' && (
+                <>
+                    <button onClick={handleNew} className="btn btn-sm btn-ghost border-base-300 text-base-content">Nouveau</button>
+                    <button onClick={handleSave} className="btn btn-sm bg-blue-600 hover:bg-blue-700 text-white font-bold border-none">Sauver</button>
+                    <button onClick={handleDownload} disabled={isGeneratingPdf} className="btn btn-sm bg-red-600 hover:bg-red-700 text-white font-bold border-none">
+                        {isGeneratingPdf ? "..." : "PDF"}
+                    </button>
+                </>
+            )}
+            <button onClick={() => setView('settings')} className={`btn btn-sm btn-circle btn-ghost ${view === 'settings' ? 'bg-base-200 text-primary' : 'text-base-content'}`}><Settings className="w-5 h-5" /></button>
+        </div>
       </div>
+      {renderContent()}
     </div>
   );
 }

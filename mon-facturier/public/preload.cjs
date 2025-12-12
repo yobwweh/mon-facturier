@@ -1,11 +1,18 @@
-// public/preload.cjs
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  // Fonction pour générer le PDF
-  exportToPDF: (fileName) => ipcRenderer.invoke('export-pdf', fileName),
-  
-  // Fonctions pour la sauvegarde des données (optionnel mais recommandé)
-  saveFile: (filename, data) => ipcRenderer.invoke('save-file', filename, data),
-  readFile: (filename) => ipcRenderer.invoke('read-file', filename)
+  // --- CLIENTS ---
+  getClients: () => ipcRenderer.invoke('get-clients'),
+  addClient: (clientData) => ipcRenderer.invoke('add-client', clientData),
+  deleteClient: (id) => ipcRenderer.invoke('delete-client', id),
+
+  // --- PRODUITS (Ajouté) ---
+  getProducts: () => ipcRenderer.invoke('get-products'),
+  addProduct: (productData) => ipcRenderer.invoke('add-product', productData),
+  deleteProduct: (id) => ipcRenderer.invoke('delete-product', id),
+
+  // --- DOCUMENTS ---
+  getDocuments: () => ipcRenderer.invoke('get-documents'),
+  saveDocument: (doc) => ipcRenderer.invoke('save-document', doc),
+  deleteDocument: (docId) => ipcRenderer.invoke('delete-document', docId)
 });
