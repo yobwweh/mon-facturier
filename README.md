@@ -21,13 +21,13 @@ Bâtie avec **Electron** et **React**, l'application fonctionne entièrement **h
 
 ##  Fonctionnalités Clés
 
-* ** Gestion complète des documents** : Créez des **Factures**, **Devis** et **Reçus** professionnels en quelques clics.
-* ** Gestion Clients** : Enregistrez, modifiez et retrouvez facilement vos clients.
-* ** Catalogue Produits & Services** : Gérez une base de données de vos articles pour une saisie rapide.
-* ** Export PDF Instantané** : Génération de documents PDF propres et conformes, prêts à être imprimés ou partagés.
-* ** Tableau de Bord** : Vue d'ensemble de votre activité avec des indicateurs clairs.
-* ** Mode Hors-ligne** : Toutes les données sont stockées localement (**SQLite**), aucune connexion internet requise.
-* ** Personnalisation** :
+ Gestion complète des documents : Créez des **Factures**, **Devis** et **Reçus** professionnels en quelques clics.
+Gestion Clients : Enregistrez, modifiez et retrouvez facilement vos clients.
+Catalogue Produits & Services : Gérez une base de données de vos articles pour une saisie rapide.
+ Export PDF Instantané : Génération de documents PDF propres et conformes, prêts à être imprimés ou partagés.
+Tableau de Bord : Vue d'ensemble de votre activité avec des indicateurs clairs.
+Mode Hors-ligne : Toutes les données sont stockées localement (**SQLite**), aucune connexion internet requise.
+Personnalisation :
     * Profil de l'entreprise complet (Logo, NCC, RCCM, Coordonnées).
     * Mode Sombre / Mode Clair (Thèmes Winter et Night).
 * ** Sauvegarde Automatique** : Ne perdez jamais votre travail en cours grâce à l'auto-save des brouillons.
@@ -53,36 +53,37 @@ Ce projet repose sur une stack technique moderne et robuste :
 
 Pour lancer le projet localement sur votre machine :
 
-### 1. Cloner le dépôt
+   ### 1. Cloner le dépôt
 
 ```bash
 git clone [https://github.com/yobwweh/mon-facturier-ci.git](https://github.com/yobwweh/mon-facturier-ci.git)
-cd mon-facturier-ci
+```
+   2. Installer les dépendances
 
-2. Installer les dépendances
-Bash
-
-npm install
-Note : Assurez-vous d'avoir les outils de compilation natifs installés (Python, C++ build tools) pour better-sqlite3 si nécessaire.
+    ```bash
+    npm install
+       ```
 
 3. Lancer l'application
+
 Mode Développement (Web uniquement) Pour travailler sur l'interface (la base de données locale sera simulée ou non disponible selon votre config).
-
-Bash
-
+  ```bash
 npm run dev
+ ```
 Lancer l'application Desktop Pour lancer la version Electron complète avec base de données.
 
-Bash
-
+```bash
 npm run start
+ ```
+
 4. Compiler pour la production
 Pour créer l'exécutable (Windows/Mac/Linux).
 
-Bash
-
+```bash
 npm run dist
-👤 Auteur
+ ```
+  ## Auteur
+
 Yoboué N'Guessan Armel Constant
 
 Développé avec ❤️ pour les entrepreneurs de Côte d'Ivoire.
